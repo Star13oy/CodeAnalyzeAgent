@@ -1,0 +1,56 @@
+# ============================================
+# Core Dependencies
+# ============================================
+anthropic>=0.40.0
+openai>=1.0.0
+pydantic>=2.0.0
+pydantic-settings>=2.0.0
+fastapi>=0.100.0
+uvicorn[standard]>=0.23.0
+httpx>=0.24.0
+
+# ============================================
+# Database Support - Multi-Database
+# ============================================
+# SQLAlchemy ORM
+sqlalchemy>=2.0.0
+
+# SQLite (built-in with Python)
+aiosqlite>=0.19.0
+
+# MySQL / MariaDB / GoldenDB
+pymysql>=1.1.0
+
+# PostgreSQL / GaussDB
+psycopg[binary]>=3.1.0
+
+# Connection pooling
+databases>=0.8.0
+
+# ============================================
+# API & HTTP
+# ============================================
+python-multipart>=0.0.6
+
+# ============================================
+# Code Analysis Tools
+# ============================================
+# ripgrep integration (system package required)
+# universal-ctags integration (system package required)
+
+# ============================================
+# Development Dependencies
+# ============================================
+pytest>=7.4.0
+pytest-cov>=4.1.0
+pytest-asyncio>=0.21.0
+pytest-mock>=3.11.0
+black>=23.7.0
+ruff>=0.1.0
+mypy>=1.5.0
+pre-commit>=3.3.0
+
+# ============================================
+# Optional: Redis Cache
+# ============================================
+# redis>=5.0.0

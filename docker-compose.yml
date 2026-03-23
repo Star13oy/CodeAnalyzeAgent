@@ -1,0 +1,109 @@
+version: '3.8'
+
+services:
+  # CodeAgent API Service
+  codeagent:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: codeagent-api
+    ports:
+      - "8000:8000"
+    environment:
+      # Database
+      - DB_TYPE=sqlite
+      - DB_SQLITE_PATH=/app/data/db/codeagent.db
+
+      # LLM Provider (Company Gateway)
+      - LLM_PROVIDER=company
+      - COMPANY_LLM_BASE_URL=https://your-company-gateway.com
+      - COMPANY_LLM_API_KEY=${COMPANY_LLM_API_KEY:-sk-your-key-here}
+      - COMPANY_LLM_MODEL=claude-sonnet-4-6
+
+      # API Configuration
+      - API_HOST=0.0.0.0
+      - API_PORT=8000
+      - API_RELOAD=false
+
+      # Agent Configuration
+      - MAX_TOOL_ITERATIONS=10
+      - AGENT_TEMPERATURE=0.7
+      - AGENT_MAX_TOKENS=4096
+
+      # Session Configuration
+      - SESSION_TIMEOUT=3600
+      - MAX_SESSIONS=1000
+
+      # Logging
+      - LOG_LEVEL=INFO
+      - LOG_FORMAT=json
+
+      # Repository
+      - REPO_BASE_PATH=/app/data/repos
+
+      # Security
+      - API_TOKEN=${API_TOKEN:-}
+      - CORS_ORIGINS=http://localhost:3000,http://localhost:8080
+    volumes:
+      # Persist data
+      - ./data:/app/data
+      # Mount repos directory
+      - repo-data:/app/data/repos
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 5s
+    networks:
+      - codeagent-network
+
+  # Optional: PostgreSQL Database
+  postgres:
+    image: postgres:16-alpine
+    container_name: codeagent-postgres
+    environment:
+      - POSTGRES_DB=codeagent
+      - POSTGRES_USER=codeagent
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-codeagent_password}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    restart: unless-stopped
+    networks:
+      - codeagent-network
+    profiles:
+      - postgres  # Only start with: docker-compose --profile postgres up
+
+  # Optional: MySQL Database
+  mysql:
+    image: mysql:8.0
+    container_name: codeagent-mysql
+    environment:
+      - MYSQL_DATABASE=codeagent
+      - MYSQL_USER=codeagent
+      - MYSQL_PASSWORD=${MYSQL_PASSWORD:-codeagent_password}
+      - MYSQL_ROOT_PASSWORD=${MYSQL_ROOT_PASSWORD:-root_password}
+    volumes:
+      - mysql-data:/var/lib/mysql
+    ports:
+      - "3306:3306"
+    restart: unless-stopped
+    networks:
+      - codeagent-network
+    profiles:
+      - mysql  # Only start with: docker-compose --profile mysql up
+
+volumes:
+  repo-data:
+    driver: local
+  postgres-data:
+    driver: local
+  mysql-data:
+    driver: local
+
+networks:
+  codeagent-network:
+    driver: bridge
