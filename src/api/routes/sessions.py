@@ -39,6 +39,36 @@ async def get_session_service() -> SessionService:
     return session_service
 
 
+@router.get(
+    "/repos/{repo_id}/sessions",
+    summary="List sessions",
+    description="List all sessions for a repository",
+)
+async def list_sessions(
+    repo_id: str,
+    session_service: SessionService = Depends(get_session_service),
+):
+    """
+    List all sessions.
+
+    - **repo_id**: Repository identifier
+    """
+    sessions = session_service.list_by_repo(repo_id)
+    return {
+        "sessions": [s.to_dict() for s in sessions],
+        "total": len(sessions),
+    }
+
+
+@router.get(
+    "/repos/{repo_id}/sessions/test",
+    summary="Test endpoint",
+)
+async def test_sessions():
+    """Test endpoint to verify route updates"""
+    return {"status": "ok", "message": "Sessions routes working"}
+
+
 @router.post(
     "/repos/{repo_id}/sessions",
     response_model=SessionCreateResponse,

@@ -208,6 +208,37 @@ body {
     margin-bottom: var(--space-md);
 }
 
+.sidebar-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: var(--space-md);
+}
+
+.sidebar-header .sidebar-title {
+    margin-bottom: 0;
+}
+
+.btn-icon-small {
+    width: 28px;
+    height: 28px;
+    border-radius: var(--space-sm);
+    background: transparent;
+    border: 1px solid var(--border-secondary);
+    color: var(--text-secondary);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    transition: all var(--transition-fast);
+}
+
+.btn-icon-small:hover {
+    border-color: var(--accent-primary);
+    color: var(--accent-primary);
+    background: var(--bg-tertiary);
+}
+
 .btn-full {
     width: 100%;
     justify-content: center;

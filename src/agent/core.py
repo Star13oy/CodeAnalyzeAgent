@@ -13,6 +13,9 @@ from dataclasses import dataclass, field
 
 from ..llm.base import LLMProvider, Message, LLMResponse
 from ..tools.base import BaseTool
+from .parallel import ParallelExecutor, ToolCall, ToolResult
+from .context_manager import ContextManager
+from .session import SessionManager
 
 logger = logging.getLogger(__name__)
 
@@ -84,6 +87,9 @@ Be concise. A good answer with 3-5 file references is better than exhaustive exp
         tools: List[BaseTool],
         max_iterations: int = 10,
         temperature: float = 0.7,
+        enable_parallel: bool = True,
+        max_parallel_workers: int = 5,
+        context_manager: Optional[ContextManager] = None,
     ):
         """
         Initialize the agent.
@@ -94,22 +100,34 @@ Be concise. A good answer with 3-5 file references is better than exhaustive exp
             tools: List of available tools
             max_iterations: Maximum tool use iterations
             temperature: LLM temperature (0-1)
+            enable_parallel: Enable parallel tool execution
+            max_parallel_workers: Maximum parallel tool executions
+            context_manager: Optional context manager for conversation history
         """
         self.repo_path = repo_path
         self.llm = llm
         self.tools = {t.name: t for t in tools}
         self.max_iterations = max_iterations
         self.temperature = temperature
+        self.enable_parallel = enable_parallel
+        self.context_manager = context_manager
+
+        # Initialize parallel executor
+        self.parallel_executor = None
+        if enable_parallel:
+            self.parallel_executor = ParallelExecutor(max_workers=max_parallel_workers)
 
         logger.info(
             f"Initialized CodeAgent for {repo_path} "
-            f"with {len(tools)} tools, max_iterations={max_iterations}"
+            f"with {len(tools)} tools, max_iterations={max_iterations}, "
+            f"parallel={enable_parallel}"
         )
 
     def ask(
         self,
         question: str,
         session_id: Optional[str] = None,
+        session_manager: Optional[SessionManager] = None,
     ) -> AgentResult:
         """
         Answer a question about the codebase.
@@ -117,6 +135,7 @@ Be concise. A good answer with 3-5 file references is better than exhaustive exp
         Args:
             question: User's question
             session_id: Optional session ID for multi-turn conversations
+            session_manager: Optional session manager for conversation history
 
         Returns:
             AgentResult: Answer with sources and metadata
@@ -126,8 +145,26 @@ Be concise. A good answer with 3-5 file references is better than exhaustive exp
 
         logger.info(f"Processing question for session {session_id}: {question[:100]}...")
 
-        # Build messages - combine system prompt into user message for company API compatibility
-        enhanced_question = f"{self.SYSTEM_PROMPT}\n\n{self._enhance_question(question)}"
+        # Build conversation context if session manager is provided
+        conversation_context = ""
+        if session_manager and self.context_manager:
+            session = session_manager.get(session_id)
+            if session and session.messages:
+                conversation_context, token_count = self.context_manager.build_context(
+                    session, question
+                )
+                logger.info(f"Built conversation context: {token_count} tokens")
+
+        # Build messages - combine system prompt + context + question
+        if conversation_context:
+            enhanced_question = (
+                f"{self.SYSTEM_PROMPT}\n\n"
+                f"{conversation_context}\n\n"
+                f"当前问题: {question}"
+            )
+        else:
+            enhanced_question = f"{self.SYSTEM_PROMPT}\n\n{self._enhance_question(question)}"
+
         messages = [
             Message(role="user", content=enhanced_question),
         ]
@@ -158,23 +195,27 @@ Be concise. A good answer with 3-5 file references is better than exhaustive exp
             # Check if done
             if response.finish_reason == "stop":
                 logger.info(f"Agent finished after {iteration} iterations")
-                return self._build_result(
+                result = self._build_result(
                     answer=response.content,
                     tool_calls=tool_call_records,
                     session_id=session_id,
                     usage=response.usage,
                 )
+                self._save_to_session(session_manager, session_id, question, result.answer)
+                return result
 
             # Process tool calls
             if not response.tool_calls:
                 logger.warning("No tool calls but not finished, returning partial answer")
-                return self._build_result(
+                result = self._build_result(
                     answer=response.content or "Unable to complete the analysis.",
                     tool_calls=tool_call_records,
                     session_id=session_id,
                     usage=response.usage,
                     confidence=0.3,
                 )
+                self._save_to_session(session_manager, session_id, question, result.answer)
+                return result
 
             # Execute tools
             assistant_message = Message(
@@ -183,11 +224,12 @@ Be concise. A good answer with 3-5 file references is better than exhaustive exp
             )
             messages.append(assistant_message)
 
-            for tool_call in response.tool_calls:
-                record = self._execute_tool_call(tool_call, iteration)
-                tool_call_records.append(record)
+            # Execute tools (parallel if enabled and multiple tools)
+            records = self._execute_tool_calls(response.tool_calls, iteration)
+            tool_call_records.extend(records)
 
-                # Add tool result to messages
+            # Add tool results to messages
+            for record in records:
                 messages.append(Message(
                     role="user",
                     content=record.result,
@@ -195,12 +237,42 @@ Be concise. A good answer with 3-5 file references is better than exhaustive exp
 
         # Max iterations reached
         logger.warning(f"Reached max iterations ({self.max_iterations})")
-        return self._build_result(
+        result = self._build_result(
             answer="I reached the maximum number of iterations. The analysis was not fully completed.",
             tool_calls=tool_call_records,
             session_id=session_id,
             confidence=0.2,
         )
+        self._save_to_session(session_manager, session_id, question, result.answer)
+        return result
+
+    def _save_to_session(
+        self,
+        session_manager: Optional[SessionManager],
+        session_id: str,
+        question: str,
+        answer: str,
+    ) -> None:
+        """
+        Save Q&A to session history.
+
+        Args:
+            session_manager: Session manager instance
+            session_id: Session ID
+            question: User question
+            answer: Agent answer
+        """
+        if not session_manager:
+            return
+
+        session = session_manager.get(session_id)
+        if not session:
+            logger.debug(f"Session {session_id} not found, skipping message save")
+            return
+
+        session.add_message("user", question)
+        session.add_message("assistant", answer)
+        logger.debug(f"Saved messages to session {session_id}")
 
     def _enhance_question(self, question: str) -> str:
         """
@@ -306,24 +378,24 @@ Provide a detailed answer with specific references to files and line numbers."""
                 # Execute tools
                 messages.append(Message(role="assistant", content=response.content or ""))
 
-                for tool_call in response.tool_calls:
+                # Execute tools (parallel if enabled)
+                records = self._execute_tool_calls(response.tool_calls, iteration)
+                tool_call_records.extend(records)
+
+                # Yield tool results
+                for record in records:
                     yield {
                         "type": "tool_call",
-                        "tool": tool_call.name,
-                        "arguments": tool_call.arguments,
+                        "tool": record.name,
+                        "arguments": record.arguments,
                         "iteration": iteration + 1
                     }
-
-                    record = self._execute_tool_call(tool_call, iteration)
-                    tool_call_records.append(record)
-
                     yield {
                         "type": "tool_result",
                         "tool": record.name,
                         "success": record.success,
                         "result_preview": record.result[:200] + "..." if len(record.result) > 200 else record.result
                     }
-
                     messages.append(Message(role="user", content=record.result))
 
             # Max iterations
@@ -389,6 +461,83 @@ Provide a detailed answer with specific references to files and line numbers."""
                 iteration=iteration,
                 success=False,
             )
+
+    def _execute_tool_calls(self, tool_calls, iteration: int) -> List[ToolCallRecord]:
+        """
+        Execute multiple tool calls, with parallel execution if enabled.
+
+        Args:
+            tool_calls: List of tool calls from LLM
+            iteration: Current iteration number
+
+        Returns:
+            List[ToolCallRecord]: Records of the tool executions
+        """
+        if not tool_calls:
+            return []
+
+        # Single tool call - execute directly
+        if len(tool_calls) == 1:
+            return [self._execute_tool_call(tool_calls[0], iteration)]
+
+        # Multiple tools - check if parallel execution is possible
+        if self.enable_parallel and self.parallel_executor:
+            # Check if all tools are different (can parallelize)
+            tool_names = [tc.name for tc in tool_calls]
+            if len(tool_names) == len(set(tool_names)):
+                # All tools are different - execute in parallel
+                return self._execute_parallel(tool_calls, iteration)
+            else:
+                # Duplicate tools - execute sequentially
+                logger.debug("Duplicate tool names detected, executing sequentially")
+                return [self._execute_tool_call(tc, iteration) for tc in tool_calls]
+        else:
+            # Parallel disabled - execute sequentially
+            return [self._execute_tool_call(tc, iteration) for tc in tool_calls]
+
+    def _execute_parallel(self, tool_calls, iteration: int) -> List[ToolCallRecord]:
+        """
+        Execute multiple tool calls in parallel.
+
+        Args:
+            tool_calls: List of tool calls from LLM
+            iteration: Current iteration number
+
+        Returns:
+            List[ToolCallRecord]: Records of the tool executions
+        """
+        # Convert LLM tool calls to parallel executor format
+        parallel_calls = [
+            ToolCall(
+                name=tc.name,
+                arguments=tc.arguments,
+                call_id=f"{iteration}_{i}",
+            )
+            for i, tc in enumerate(tool_calls)
+        ]
+
+        logger.info(f"Executing {len(tool_calls)} tools in parallel")
+
+        # Execute in parallel
+        results = self.parallel_executor.execute_parallel(parallel_calls, self.tools)
+
+        # Convert results back to ToolCallRecord format
+        records = []
+        for i, result in enumerate(results):
+            records.append(ToolCallRecord(
+                name=result.name,
+                arguments=tool_calls[i].arguments,
+                result=result.result if result.success else f"Error: {result.error}",
+                iteration=iteration,
+                success=result.success,
+            ))
+
+            logger.debug(
+                f"Parallel tool {result.name} completed in {result.duration_ms:.1f}ms, "
+                f"success={result.success}"
+            )
+
+        return records
 
     def _build_result(
         self,

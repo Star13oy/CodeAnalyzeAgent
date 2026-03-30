@@ -2,7 +2,7 @@
 // CODEAGENT - Frontend Application
 // ============================================
 
-const API_BASE_URL = 'http://localhost:8004/api/v1';
+const API_BASE_URL = 'http://localhost:8005/api/v1';
 
 // Application State
 const state = {
@@ -20,7 +20,7 @@ const state = {
 const api = {
     async healthCheck() {
         try {
-            const response = await fetch('http://localhost:8004/health');
+            const response = await fetch('http://localhost:8005/health');
             const data = await response.json();
             return data;
         } catch (error) {
@@ -147,12 +147,25 @@ const ui = {
         if (!repo) return;
 
         state.currentRepo = repo;
+        state.currentSession = null; // Clear current session
 
         // Update UI
         document.getElementById('currentRepoName').textContent = repo.name;
         document.getElementById('currentRepoPath').textContent = repo.path;
 
-        // Clear chat and show welcome
+        // Load existing sessions first
+        await this.loadSessions(repoId);
+
+        // Show welcome with "New Chat" option
+        this.showWelcomeScreen(repo);
+
+        // Update active state in list
+        document.querySelectorAll('.repo-item').forEach(item => {
+            item.classList.toggle('active', item.dataset.repoId === repoId);
+        });
+    },
+
+    showWelcomeScreen(repo) {
         const chatMessages = document.getElementById('chatMessages');
         chatMessages.innerHTML = `
             <div class="welcome-message">
@@ -164,22 +177,26 @@ const ui = {
                     </svg>
                 </div>
                 <h3>${repo.name}</h3>
-                <p>提问 ${repo.path} 中的代码问题</p>
+                <p>开始新的对话或从历史记录中选择</p>
+                ${state.sessions.length > 0 ? `
+                    <p style="margin-top: 16px; color: #888;">
+                        共有 ${state.sessions.length} 条历史对话
+                    </p>
+                ` : ''}
             </div>
         `;
+    },
 
-        // Create new session
-        try {
-            const session = await api.createSession(repoId);
-            state.currentSession = session;
-            await this.loadSessions(repoId);
-        } catch (error) {
-            console.error('Failed to create session:', error);
-        }
+    startNewChat() {
+        if (!state.currentRepo) return;
 
-        // Update active state in list
-        document.querySelectorAll('.repo-item').forEach(item => {
-            item.classList.toggle('active', item.dataset.repoId === repoId);
+        // Clear current session - will be created when first message is sent
+        state.currentSession = null;
+        this.showWelcomeScreen(state.currentRepo);
+
+        // Update active state in session list (remove all active)
+        document.querySelectorAll('.session-item').forEach(item => {
+            item.classList.remove('active');
         });
     },
 
@@ -203,12 +220,24 @@ const ui = {
             return;
         }
 
-        sessionList.innerHTML = state.sessions.map(session => `
-            <div class="session-item ${state.currentSession?.session_id === session.session_id ? 'active' : ''}" data-session-id="${session.session_id}">
-                <div class="session-name">对话 ${session.session_id.substring(0, 8)}</div>
-                <div class="session-meta">${new Date(session.created_at).toLocaleString()}</div>
-            </div>
-        `).join('');
+        // Sort sessions by created_at desc (newest first)
+        const sortedSessions = [...state.sessions].sort((a, b) =>
+            new Date(b.created_at) - new Date(a.created_at)
+        );
+
+        sessionList.innerHTML = sortedSessions.map(session => {
+            // Get first user message as title
+            const firstUserMsg = session.messages?.find(m => m.role === 'user');
+            const title = firstUserMsg ? this.truncateText(firstUserMsg.content, 30) : '新对话';
+            const time = this.formatSessionTime(session.created_at);
+
+            return `
+                <div class="session-item ${state.currentSession?.session_id === session.session_id ? 'active' : ''}" data-session-id="${session.session_id}">
+                    <div class="session-name">${this.escapeHtml(title)}</div>
+                    <div class="session-meta">${time}</div>
+                </div>
+            `;
+        }).join('');
 
         // Add click handlers
         sessionList.querySelectorAll('.session-item').forEach(item => {
@@ -219,11 +248,50 @@ const ui = {
         });
     },
 
+    truncateText(text, maxLength) {
+        if (!text || text.length <= maxLength) return text || '';
+        return text.substring(0, maxLength) + '...';
+    },
+
+    escapeHtml(text) {
+        const div = document.createElement('div');
+        div.textContent = text;
+        return div.innerHTML;
+    },
+
+    formatSessionTime(dateStr) {
+        const date = new Date(dateStr);
+        const now = new Date();
+        const diff = now - date;
+
+        // Less than 1 hour
+        if (diff < 3600000) {
+            return Math.floor(diff / 60000) + '分钟前';
+        }
+        // Today
+        if (date.toDateString() === now.toDateString()) {
+            return date.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
+        }
+        // Yesterday
+        const yesterday = new Date(now);
+        yesterday.setDate(yesterday.getDate() - 1);
+        if (date.toDateString() === yesterday.toDateString()) {
+            return '昨天 ' + date.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
+        }
+        // Older
+        return date.toLocaleDateString('zh-CN', { month: 'short', day: 'numeric' });
+    },
+
     async loadSession(sessionId) {
         if (!state.currentRepo) return;
 
         try {
             const session = await api.getSession(state.currentRepo.id, sessionId);
+
+            // Ensure messages array exists
+            if (!session.messages) {
+                session.messages = [];
+            }
             state.currentSession = session;
 
             // Render messages
@@ -430,10 +498,17 @@ function setupEventHandlers() {
         }
     });
 
-    // Clear chat button
+    // New chat button
+    document.getElementById('newChatBtn').addEventListener('click', async () => {
+        if (state.currentRepo) {
+            await ui.startNewChat();
+        }
+    });
+
+    // Clear chat button - same as new chat
     document.getElementById('clearChatBtn').addEventListener('click', async () => {
         if (state.currentRepo) {
-            await ui.selectRepository(state.currentRepo.id);
+            await ui.startNewChat();
         }
     });
 }
@@ -499,10 +574,44 @@ async function sendMessage() {
             ui.addMessage('assistant', finalResult.answer, finalResult.sources);
 
             if (finalResult.session_id) {
-                state.currentSession = {
-                    session_id: finalResult.session_id,
-                    repo_id: state.currentRepo.id
-                };
+                // Update current session with messages
+                if (!state.currentSession) {
+                    state.currentSession = {
+                        session_id: finalResult.session_id,
+                        repo_id: state.currentRepo.id,
+                        messages: []
+                    };
+                }
+
+                // Ensure messages array exists
+                if (!state.currentSession.messages) {
+                    state.currentSession.messages = [];
+                }
+
+                // Add messages to session if not already there
+                const hasUserMsg = state.currentSession.messages.some(
+                    m => m.role === 'user' && m.content === message
+                );
+                if (!hasUserMsg) {
+                    state.currentSession.messages.push({
+                        role: 'user',
+                        content: message,
+                        timestamp: Date.now() / 1000
+                    });
+                }
+
+                const hasAssistantMsg = state.currentSession.messages.some(
+                    m => m.role === 'assistant' && m.content === finalResult.answer
+                );
+                if (!hasAssistantMsg) {
+                    state.currentSession.messages.push({
+                        role: 'assistant',
+                        content: finalResult.answer,
+                        timestamp: Date.now() / 1000,
+                        sources: finalResult.sources
+                    });
+                }
+
                 await ui.loadSessions(state.currentRepo.id);
             }
         }

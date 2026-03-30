@@ -46,8 +46,8 @@ async def lifespan(app: FastAPI):
 
     global repo_service, agent_service, session_service
     repo_service = RepositoryService()
-    agent_service = AgentService()
     session_service = SessionService()
+    agent_service = AgentService(session_service=session_service)
 
     logger.info("CodeAgent API started successfully")
 

@@ -16,6 +16,8 @@
 1. [代码库管理](#1-代码库管理)
 2. [问答接口](#2-问答接口)
 3. [排障接口](#3-排障接口)
+   - 3.1 [故障诊断](#31-故障诊断)
+   - 3.2 [告警分析](#32-告警分析新增)
 4. [会话管理](#4-会话管理)
 5. [健康检查](#5-健康检查)
 
@@ -336,6 +338,90 @@ Content-Type: application/json
   "estimated_fix_time": "5分钟"
 }
 ```
+
+---
+
+## 3.2 告警分析（新增）
+
+智能分析代码告警和错误日志，提供根因定位和修复建议。
+
+### 3.2.1 分析告警
+
+**请求**
+```http
+POST /api/v1/repos/{id}/analyze-alert
+Content-Type: application/json
+
+{
+  "alert_message": "KeyError: 'user_id' not found",
+  "stack_trace": "Traceback (most recent call last):\n  File \"app.py\", line 42, in process_user\n    user_id = data['user_id']\nKeyError: 'user_id'",
+  "context": {
+    "environment": "production",
+    "service": "user-service"
+  }
+}
+```
+
+**参数**
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| alert_message | string | 是 | 告警/错误消息 |
+| stack_trace | string | 否 | 堆栈跟踪 |
+| context | object | 否 | 额外上下文 |
+
+**响应**
+```json
+{
+  "alert_id": "a1b2c3d4e5f6",
+  "error_message": "KeyError: 'user_id' not found",
+  "error_category": "key_error",
+  "severity": "medium",
+  "root_cause": "Error occurred in process_user at app.py:42. The dictionary doesn't contain the key 'user_id' you're trying to access.",
+  "suggested_fix": "Use dict.get(key, default) to provide a default value, or check if the key exists with 'if key in dict'.",
+  "related_files": ["app.py"],
+  "stack_trace": [
+    "at process_user (app.py:42)",
+    "at handle_request (app.py:15)"
+  ],
+  "suggested_solutions": [
+    {
+      "problem": "KeyError: 'xxx' not found",
+      "solution": "The dictionary doesn't contain the key you're trying to access. Use dict.get(key, default) to provide a default value, or check if the key exists with 'if key in dict'.",
+      "tags": ["key_error", "dictionary", "python"],
+      "code_example": "# Safe access\nvalue = my_dict.get(key, None)\n\n# Check before access\nif key in my_dict:\n    value = my_dict[key]"
+    }
+  ],
+  "analyzed_at": "2026-03-24T10:00:00Z",
+  "confidence": 0.92,
+  "quick_diagnosis": "The dictionary doesn't contain the key you're trying to access. Suggestion: Use dict.get(key, default) to provide a default value."
+}
+```
+
+**支持的语言**
+- Python
+- Java
+- JavaScript / TypeScript
+- Go
+- Rust
+- C/C++
+- Ruby
+- PHP
+
+**错误分类**
+| 类别 | 说明 | 严重级别 |
+|------|------|----------|
+| null_pointer | 空指针/None 访问 | high |
+| type_error | 类型不匹配 | medium |
+| file_not_found | 文件未找到 | medium |
+| permission_denied | 权限拒绝 | high |
+| timeout | 超时 | medium |
+| connection_error | 连接错误 | high |
+| out_of_memory | 内存溢出 | critical |
+| index_error | 索引越界 | high |
+| key_error | 键不存在 | medium |
+| import_error | 模块导入失败 | medium |
+| syntax_error | 语法错误 | high |
+| database | 数据库错误 | high |
 
 ---
 

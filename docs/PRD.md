@@ -84,6 +84,35 @@ POST /api/v1/repos/{id}/troubleshoot
 }
 ```
 
+#### 2.2.4 告警分析接口（新增）
+```
+POST /api/v1/repos/{id}/analyze-alert
+{
+  "alert_message": "KeyError: 'user_id' not found",
+  "stack_trace": "Traceback (most recent call last):\n  File 'app.py', line 42...",
+  "context": {"environment": "production"}
+}
+→ {
+  "alert_id": "abc123",
+  "error_category": "key_error",
+  "severity": "medium",
+  "root_cause": "Dictionary key 'user_id' doesn't exist",
+  "suggested_fix": "Use dict.get('user_id', default) or check if key exists",
+  "related_files": ["app.py"],
+  "stack_frames": [...],
+  "suggested_solutions": [...],
+  "confidence": 0.92,
+  "analyzed_at": "2026-03-24T10:00:00Z"
+}
+```
+
+**告警分析特性：**
+- 多语言堆栈解析（Python、Java、JavaScript、Go、Rust、C/C++、Ruby、PHP）
+- 15+ 预定义错误模式匹配
+- 智能知识库查找
+- 相似历史问题检索
+- 根因帧自动识别
+
 ---
 
 ## 3. 非功能需求
